@@ -1,96 +1,199 @@
 """
-Test script for the refactored Human Design calculation library.
-This script demonstrates how to use the library to calculate and display Human Design features.
+Test script for Human Design Calculator.
+
+This script tests the functionality of the Human Design calculation package
+by verifying results for known birth dates.
 """
 
 import sys
 import json
 from datetime import datetime
-from pprint import pprint
 
-# Make sure the library is in your Python path
-sys.path.append('.')
+# Try to import the human_design package 
+try:
+    from calculations import calculate_human_design
+    from utils import get_utc_offset_from_tz
+except ImportError:
+    print("Human Design package not found. Make sure it's installed or in the PYTHONPATH.")
+    print("If you're running this script directly from the project directory,")
+    print("try: PYTHONPATH=. python test.py")
+    sys.exit(1)
 
-# Import the human_design library
-from human_design.calculations import calculate_human_design
-from human_design.utils import get_utc_offset_from_tz
+# Test cases with known results for validation
+TEST_CASES = [
+    {
+        "name": "Test Case 1: Manifesting Generator",
+        "birth_data": (1968, 2, 21, 11, 15, 0, 3),  # UTC+3
+        "timezone_name": "Europe/Istanbul",
+        "expected": {
+            "energy_type": "MANIFESTING GENERATOR",
+            "authority": "SP"  # Emotional Authority
+        }
+    },
+    {
+        "name": "Test Case 2: Generator",
+        "birth_data": (1973, 1, 19, 11, 15, 0, 3),  # UTC+3
+        "timezone_name": "Europe/Istanbul",
+        "expected": {
+            "energy_type": "GENERATOR",
+            "authority": "SL"  # Sacral Authority
+        }
+    },
+    {
+        "name": "Test Case 3: Dalai Lama - Projector",
+        "birth_data": (1935, 7, 6, 4, 48, 0, 8),  # UTC+8
+        "timezone_name": "Asia/Shanghai",
+        "expected": {
+            "energy_type": "PROJECTOR"
+        }
+    },
+]
 
-def test_individual_calculation():
-    """Test calculating human design features for a specific birth time"""
+def run_tests():
+    """Run all test cases and verify results."""
+    total_tests = 0
+    passed_tests = 0
     
-    # Birth Time Configuration
-    # Format: (year, month, day, hour, minute, second)
-    zone = 'Asia/Istanbul'  # Timezone for the birth location
-    birth_time = (1968, 2, 21, 11, 15, 0)  # Example: February 21, 1968, 11:15 AM
+    for test_case in TEST_CASES:
+        print(f"\n{test_case['name']}")
+        print("-" * len(test_case['name']))
+        
+        # Get the birth data
+        birth_data = test_case["birth_data"]
+        timezone_name = test_case.get("timezone_name")
+        
+        # If timezone_name is provided, recalculate the offset
+        if timezone_name:
+            try:
+                # Get year, month, day, hour, minute, second from birth_data
+                timestamp = birth_data[:6]
+                offset = get_utc_offset_from_tz(timestamp, timezone_name)
+                birth_data = (*timestamp, offset)
+                print(f"Using timezone: {timezone_name} (UTC{'+' if offset >= 0 else ''}{offset})")
+            except Exception as e:
+                print(f"Error calculating timezone offset: {e}")
+        
+        try:
+            # Calculate the Human Design
+            result = calculate_human_design(birth_data, timezone_name)
+            
+            # Print summary of results
+            print(f"Birth Date: {result['birth_date']}")
+            print(f"Design Date: {result['design_date']}")
+            print(f"Energy Type: {result['energy_type']}")
+            print(f"Authority: {result['authority_name']}")
+            print(f"Profile: {result['profile']}")
+            print(f"Incarnation Cross: {result['incarnation_cross']}")
+            print(f"Defined Centers: {', '.join(result['defined_centers'])}")
+            print(f"Channels: {', '.join(result['active_channels'])}")
+            
+            # Verify expected results
+            expected = test_case.get("expected", {})
+            
+            for key, expected_value in expected.items():
+                total_tests += 1
+                actual_value = result.get(key)
+                
+                if actual_value == expected_value:
+                    print(f"✓ {key}: {actual_value}")
+                    passed_tests += 1
+                else:
+                    print(f"✗ {key}: Expected {expected_value}, got {actual_value}")
+            
+        except Exception as e:
+            print(f"Error calculating Human Design: {e}")
     
-    # Get UTC offset based on timezone and birth time
-    hours = get_utc_offset_from_tz(birth_time, zone)
+    # Print summary
+    print("\n" + "=" * 50)
+    print(f"Test Summary: {passed_tests}/{total_tests} tests passed")
     
-    # Combine birth time components with timezone offset
-    timestamp = tuple(list(birth_time) + [hours])
-    
-    # Calculate Human Design Features
-    results = calculate_human_design(timestamp)
-    
-    # Display key information
-    print("\n=== HUMAN DESIGN CALCULATION RESULTS ===\n")
-    print(f"Birth Date: {results['birth_date']}")
-    print(f"Design Date: {results['design_date']}")
-    print(f"Energy Type: {results['energy_type']}")
-    print(f"Strategy: {results['strategy']}")
-    print(f"Authority: {results['authority_name']} ({results['authority']})")
-    print(f"Profile: {results['profile']}")
-    print(f"Incarnation Cross: {results['incarnation_cross']}")
-    print(f"Cross Type: {results['cross_type']}")
-    print(f"Defined Centers: {', '.join(results['defined_centers'])}")
-    print(f"Undefined Centers: {', '.join(results['undefined_centers'])}")
-    print(f"Split Definition: {results['split']}")
-    print(f"Active Gates: {', '.join(map(str, sorted(results['active_gates'])))}")
-    print(f"Active Channels: {', '.join(results['active_channels'])}")
-    
-    print("\n=== PERSONALITY GATES & LINES ===\n")
-    for gate_data in results['personality_gates']:
-        print(f"Gate {gate_data['gate']}, Line {gate_data['line']} ({gate_data['planet']})")
-    
-    print("\n=== DESIGN GATES & LINES ===\n")
-    for gate_data in results['design_gates']:
-        print(f"Gate {gate_data['gate']}, Line {gate_data['line']} ({gate_data['planet']})")
-    
-    # Export to JSON (optional)
-    with open('human_design_results.json', 'w') as f:
-        json.dump(results, f, indent=2)
-    print("\nJSON results saved to human_design_results.json")
-    
-    return results
+    return passed_tests == total_tests
 
-def test_different_birth_dates():
-    """Compare results for two different birth dates"""
+def test_api():
+    """Test the API functionality if available."""
+    try:
+        from fastapi.testclient import TestClient
+        from human_design.api import app
+        
+        client = TestClient(app)
+        
+        print("\nTesting API")
+        print("-" * 20)
+        
+        # Test the main calculation endpoint
+        test_data = {
+            "year": 1968,
+            "month": 2,
+            "day": 21,
+            "hour": 11,
+            "minute": 15,
+            "second": 0,
+            "timezone": 3,
+            "timezone_name": "Europe/Istanbul"
+        }
+        
+        response = client.post("/calculate", json=test_data)
+        
+        if response.status_code == 200:
+            print("✓ API /calculate endpoint works")
+            response_data = response.json()
+            print(f"  Energy Type: {response_data['energy_type']}")
+            print(f"  Authority: {response_data['authority_name']}")
+        else:
+            print(f"✗ API /calculate endpoint failed: {response.status_code}")
+            print(response.json())
+        
+        # Test a specific feature endpoint
+        response = client.post("/energy-type", json=test_data)
+        
+        if response.status_code == 200:
+            print("✓ API /energy-type endpoint works")
+            print(f"  Result: {response.json()}")
+        else:
+            print(f"✗ API /energy-type endpoint failed: {response.status_code}")
+            print(response.json())
+            
+        return response.status_code == 200
+        
+    except ImportError:
+        print("FastAPI or TestClient not available. Skipping API tests.")
+        return True
+    except Exception as e:
+        print(f"Error testing API: {e}")
+        return False
+
+def save_example_output():
+    """Generate and save example output for documentation."""
+    # Calculate for a sample birth date
+    birth_data = (1968, 2, 21, 11, 15, 0, 3)  # Feb 21, 1968, 11:15 AM, UTC+3
+    result = calculate_human_design(birth_data)
     
-    # Test case 1: February 21, 1968 (should be a Manifesting Generator)
-    zone = 'Asia/Istanbul'
-    birth_time1 = (1968, 2, 21, 11, 15, 0)
-    hours1 = get_utc_offset_from_tz(birth_time1, zone)
-    timestamp1 = tuple(list(birth_time1) + [hours1])
-    results1 = calculate_human_design(timestamp1)
+    # Save to a JSON file
+    with open("example_output.json", "w") as f:
+        json.dump(result, f, indent=2)
     
-    # Test case 2: January 19, 1973 (should be a Generator)
-    birth_time2 = (1973, 1, 19, 11, 15, 0)
-    hours2 = get_utc_offset_from_tz(birth_time2, zone)
-    timestamp2 = tuple(list(birth_time2) + [hours2])
-    results2 = calculate_human_design(timestamp2)
-    
-    # Compare energy types
-    print("\n=== COMPARISON OF ENERGY TYPES ===\n")
-    print(f"Birth date: {birth_time1} - Energy type: {results1['energy_type']}")
-    print(f"Birth date: {birth_time2} - Energy type: {results2['energy_type']}")
-    
-    return results1, results2
+    print("\nSaved example output to example_output.json")
 
 if __name__ == "__main__":
-    # Run the individual test
-    print("Testing individual Human Design calculation...")
-    test_individual_calculation()
+    print("Human Design Calculator Test Suite")
+    print("================================\n")
     
-    # Run the comparison test
-    print("\nTesting different birth dates...")
-    results1, results2 = test_different_birth_dates()
+    # Run the main tests
+    all_tests_passed = run_tests()
+    
+    # Test the API if available
+    api_test_passed = test_api()
+    
+    # Save example output
+    try:
+        save_example_output()
+    except Exception as e:
+        print(f"Error saving example output: {e}")
+    
+    # Exit with appropriate code
+    if all_tests_passed and api_test_passed:
+        print("\nAll tests passed!")
+        sys.exit(0)
+    else:
+        print("\nSome tests failed.")
+        sys.exit(1)
