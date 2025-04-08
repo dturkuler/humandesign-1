@@ -1,123 +1,199 @@
 """
-FastAPI implementation for Human Design calculations.
-This provides a RESTful API to access all Human Design features.
+Human Design API.
+
+This module provides a FastAPI implementation for the Human Design calculation
+system, offering endpoints to calculate various Human Design features.
 """
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from fastapi import FastAPI, HTTPException, Query, Depends
+from typing import Optional, List
+from pytz import all_timezones
+import datetime
 
-from .calculations import calculate_human_design
+from .models import (
+    BirthData, HumanDesignResponse, EnergyTypeResponse, AuthorityResponse,
+    ProfileResponse, DefinedCentersResponse, UndefinedCentersResponse,
+    SplitResponse, CrossResponse, ChannelsResponse, GatesResponse,
+    VariablesResponse
+)
+
+from .calculations import calculate_human_design, get_channel_meanings
 from .utils import get_utc_offset_from_tz
 
 app = FastAPI(
     title="Human Design API",
     description="API for calculating Human Design features",
-    version="1.0.0"
+    version="1.0.0",
 )
 
-class BirthTimeInput(BaseModel):
-    """Schema for birth time input data"""
-    year: int = Field(..., example=1980, description="Birth year")
-    month: int = Field(..., example=6, description="Birth month (1-12)")
-    day: int = Field(..., example=15, description="Birth day (1-31)")
-    hour: int = Field(..., example=14, description="Birth hour (0-23)")
-    minute: int = Field(..., example=30, description="Birth minute (0-59)")
-    second: int = Field(0, example=0, description="Birth second (0-59)")
-    timezone: str = Field(..., example="Europe/Berlin", description="Timezone name (e.g., 'Europe/Berlin')")
-
-class FeatureRequest(BaseModel):
-    """Schema for requesting specific Human Design features"""
-    features: List[str] = Field(
-        [], 
-        example=["energy_type", "authority", "profile"],
-        description="List of features to include (empty for all features)"
-    )
-
-@app.post("/calculate", response_model=Dict[str, Any])
-async def calculate_design(birth_data: BirthTimeInput, feature_request: Optional[FeatureRequest] = None):
-    """
-    Calculate Human Design features based on birth time
-    
-    Returns a dictionary containing all requested Human Design features
-    """
+def validate_birth_data(birth_data: BirthData):
+    """Validate birth data and convert to timestamp format."""
+    # Validate date and time
     try:
-        # Validate input data
-        if not (1 <= birth_data.month <= 12):
-            raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
-        if not (1 <= birth_data.day <= 31):
-            raise HTTPException(status_code=400, detail="Day must be between 1 and 31")
-        if not (0 <= birth_data.hour <= 23):
-            raise HTTPException(status_code=400, detail="Hour must be between 0 and 23")
-        if not (0 <= birth_data.minute <= 59):
-            raise HTTPException(status_code=400, detail="Minute must be between 0 and 59")
-        if not (0 <= birth_data.second <= 59):
-            raise HTTPException(status_code=400, detail="Second must be between 0 and 59")
-        
-        # Get timezone offset
-        birth_time = (
+        date = datetime.datetime(
             birth_data.year, birth_data.month, birth_data.day,
             birth_data.hour, birth_data.minute, birth_data.second
         )
-        
-        try:
-            hours = get_utc_offset_from_tz(birth_time, birth_data.timezone)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid timezone: {birth_data.timezone}")
-        
-        # Calculate Human Design features
-        timestamp = birth_time + (hours,)
-        results = calculate_human_design(timestamp)
-        
-        # Filter results if specific features were requested
-        if feature_request and feature_request.features:
-            filtered_results = {k: v for k, v in results.items() if k in feature_request.features}
-            # If nothing matched, return the whole result
-            if not filtered_results:
-                return results
-            return filtered_results
-        
-        return results
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date or time: {str(e)}")
     
+    # Handle timezone
+    if birth_data.timezone_name:
+        if birth_data.timezone_name not in all_timezones:
+            raise HTTPException(status_code=400, detail=f"Invalid timezone name: {birth_data.timezone_name}")
+        try:
+            tz_offset = get_utc_offset_from_tz(
+                (birth_data.year, birth_data.month, birth_data.day,
+                 birth_data.hour, birth_data.minute, birth_data.second),
+                birth_data.timezone_name
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error calculating timezone offset: {str(e)}")
+    elif birth_data.timezone is not None:
+        tz_offset = birth_data.timezone
+    else:
+        raise HTTPException(status_code=400, detail="Either timezone or timezone_name must be provided")
+    
+    # Return as timestamp tuple
+    return (birth_data.year, birth_data.month, birth_data.day,
+            birth_data.hour, birth_data.minute, birth_data.second, tz_offset)
+
+@app.post("/calculate", response_model=HumanDesignResponse, tags=["Human Design"])
+async def calculate_human_design_chart(birth_data: BirthData):
+    """Calculate the complete Human Design chart based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        
+        # Get channel meanings for a better response
+        channel_meanings = get_channel_meanings(result["channels_data"])
+        result["active_channels"] = [cm["channel"] for cm in channel_meanings]
+        
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
 
-@app.get("/available-features")
-async def get_available_features():
-    """
-    Get a list of all available Human Design features that can be requested
-    """
-    features = [
-        "birth_date", "design_date", "energy_type", "strategy", "authority", 
-        "authority_name", "profile", "incarnation_cross", "cross_type",
-        "defined_centers", "undefined_centers", "split", "variables",
-        "active_gates", "active_channels", "personality_gates", "design_gates"
-    ]
+@app.post("/energy-type", response_model=EnergyTypeResponse, tags=["Features"])
+async def get_energy_type_and_strategy(birth_data: BirthData):
+    """Get the energy type and strategy based on birth data."""
+    timestamp = validate_birth_data(birth_data)
     
-    return {
-        "available_features": features,
-        "example_usage": {
-            "method": "POST",
-            "url": "/calculate",
-            "body": {
-                "birth_data": {
-                    "year": 1980,
-                    "month": 6,
-                    "day": 15,
-                    "hour": 14,
-                    "minute": 30,
-                    "second": 0,
-                    "timezone": "Europe/Berlin"
-                },
-                "feature_request": {
-                    "features": ["energy_type", "authority", "profile"]
-                }
-            }
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {
+            "energy_type": result["energy_type"],
+            "strategy": result["strategy"]
         }
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
 
-# The entry point when running with uvicorn
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.post("/authority", response_model=AuthorityResponse, tags=["Features"])
+async def get_authority(birth_data: BirthData):
+    """Get the inner authority based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {
+            "authority": result["authority"],
+            "authority_name": result["authority_name"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/profile", response_model=ProfileResponse, tags=["Features"])
+async def get_profile(birth_data: BirthData):
+    """Get the profile based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {"profile": result["profile"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/defined-centers", response_model=DefinedCentersResponse, tags=["Features"])
+async def get_defined_centers(birth_data: BirthData):
+    """Get the defined centers based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {"defined_centers": result["defined_centers"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/undefined-centers", response_model=UndefinedCentersResponse, tags=["Features"])
+async def get_undefined_centers(birth_data: BirthData):
+    """Get the undefined centers based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {"undefined_centers": result["undefined_centers"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/split", response_model=SplitResponse, tags=["Features"])
+async def get_split_definition(birth_data: BirthData):
+    """Get the split definition based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {"split": result["split"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/incarnation-cross", response_model=CrossResponse, tags=["Features"])
+async def get_incarnation_cross(birth_data: BirthData):
+    """Get the incarnation cross based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {
+            "incarnation_cross": result["incarnation_cross"],
+            "cross_type": result["cross_type"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/active-channels", response_model=ChannelsResponse, tags=["Features"])
+async def get_active_channels(birth_data: BirthData):
+    """Get the active channels based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        channel_meanings = get_channel_meanings(result["channels_data"])
+        return {"active_channels": channel_meanings}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/active-gates", response_model=GatesResponse, tags=["Features"])
+async def get_active_gates(birth_data: BirthData):
+    """Get the active gates based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {
+            "active_gates": result["active_gates"],
+            "personality_gates": result["personality_gates"],
+            "design_gates": result["design_gates"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
+
+@app.post("/variables", response_model=VariablesResponse, tags=["Features"])
+async def get_variables(birth_data: BirthData):
+    """Get the variables/arrows based on birth data."""
+    timestamp = validate_birth_data(birth_data)
+    
+    try:
+        result = calculate_human_design(timestamp, birth_data.timezone_name)
+        return {"variables": result["variables"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation error: {str(e)}")
